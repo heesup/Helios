@@ -1298,6 +1298,7 @@ std::vector<uint> PlantArchitecture::readPlantStructureXML(const std::string &fi
                 std::vector<uint> petiole_radial_subdivisions_all; // radial subdivisions for each petiole
                 std::vector<std::vector<vec3>> saved_leaf_bases_all_petioles; // saved leaf attachment positions for each petiole (if saved in XML)
                 std::vector<std::vector<float>> leaf_scale; // first index is petiole within internode; second index is leaf within petiole
+                std::vector<std::vector<float>> leaf_width_scale; // optional <leaf_width_scale> of each leaf; 0 when the file does not carry it
                 std::vector<std::vector<float>> leaf_pitch;
                 std::vector<std::vector<float>> leaf_yaw;
                 std::vector<std::vector<float>> leaf_roll;
@@ -1453,6 +1454,7 @@ std::vector<uint> PlantArchitecture::readPlantStructureXML(const std::string &fi
                     petiole_radial_subdivisions_all.push_back(radial_subdivisions);
 
                     leaf_scale.resize(leaf_scale.size() + 1);
+                    leaf_width_scale.resize(leaf_width_scale.size() + 1);
                     leaf_pitch.resize(leaf_pitch.size() + 1);
                     leaf_yaw.resize(leaf_yaw.size() + 1);
                     leaf_roll.resize(leaf_roll.size() + 1);
@@ -1468,6 +1470,19 @@ std::vector<uint> PlantArchitecture::readPlantStructureXML(const std::string &fi
                         // leaf scale factor
                         node_string = "leaf_scale";
                         leaf_scale.back().push_back(parse_xml_tag_float(leaf.child(node_string.c_str()), node_string, "PlantArchitecture::readPlantStructureXML"));
+
+                        // Optional (I/O addition, 2026-10-18): a multiplier on the blade's width axis (the leaf prototype's local +y) on top of
+                        // <leaf_scale>, so a leaf can be wider or narrower than its prototype. The blade's width / length is the prototype's
+                        // own times this. Absent: the leaf is scaled uniformly, exactly as before.
+                        node_string = "leaf_width_scale";
+                        float width_scale = 0.f;
+                        if (leaf.child(node_string.c_str())) {
+                            width_scale = parse_xml_tag_float(leaf.child(node_string.c_str()), node_string, "PlantArchitecture::readPlantStructureXML");
+                            if (!(width_scale > 0.f)) {
+                                helios_runtime_error("ERROR (PlantArchitecture::readPlantStructureXML): <leaf_width_scale> of a leaf in '" + filename + "' is " + std::to_string(width_scale) + ", but it must be positive.");
+                            }
+                        }
+                        leaf_width_scale.back().push_back(width_scale);
 
                         // leaf base position (optional for backward compatibility - value is ignored, auto-calculated below)
                         node_string = "leaf_base";
@@ -2514,6 +2529,10 @@ std::vector<uint> PlantArchitecture::readPlantStructureXML(const std::string &fi
 
                         // Scale leaf
                         vec3 leaf_scale_vec = leaf_scale[petiole][leaf] * make_vec3(1, 1, 1);
+                        if (leaf_width_scale[petiole][leaf] > 0.f) {
+                            // <leaf_width_scale>: the width axis (prototype local +y) scaled on top of the uniform scale
+                            leaf_scale_vec.y *= leaf_width_scale[petiole][leaf];
+                        }
                         context_ptr->scaleObject(objID_leaf, leaf_scale_vec);
 
                         // Shared with the Phytomer constructor. This was a second copy that implemented only the
