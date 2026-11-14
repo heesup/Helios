@@ -22,6 +22,8 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cstdlib>
+#include <cstring>
 #include <fstream>
 
 namespace helios {
@@ -1704,6 +1706,16 @@ void OptiX8Backend::uploadLaunchParams() {
 }
 
 void OptiX8Backend::applyLaunchParams(const RayTracingLaunchParams &params) {
+    // Opt-in V-flip correction for OptiX 8 custom-UV triangle masks. The legacy device code
+    // pre-flips V before sampleMask(), which flips a second time, so triangle masks are sampled
+    // upside down relative to OptiX 6.5, the Vulkan backend, the visualizer and the CPU
+    // solid-fraction test. HELIOS_OPTIX8_UV_FIX=1 switches to the single flip. Off by default so
+    // previously queued renders reproduce bit for bit. Read once per process.
+    static const uint32_t uv_mask_flip_fix = []() noexcept -> uint32_t {
+        const char *env = std::getenv("HELIOS_OPTIX8_UV_FIX");
+        return (env != nullptr && std::strcmp(env, "1") == 0) ? 1u : 0u;
+    }();
+    h_params.uv_mask_flip_fix       = uv_mask_flip_fix;
     h_params.launch_offset          = params.launch_offset;
     h_params.launch_count           = params.launch_count;
     h_params.rays_per_primitive     = params.rays_per_primitive;

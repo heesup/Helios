@@ -469,7 +469,13 @@ extern "C" __global__ void __intersection__patch() {
                 float2 uv = make_float2(uv0.x + beta * (uv1.x - uv0.x) + gamma * (uv2.x - uv0.x),
                                         uv0.y + beta * (uv1.y - uv0.y) + gamma * (uv2.y - uv0.y));
                 uv_u = uv.x;
-                uv_v = 1.f - uv.y; // Y-flip to match OptiX 6 convention
+                // Legacy behaviour pre-flips V here even though sampleMask() applies its own
+                // (1.f - uv_v): the mask is then read at row v*(H-1) instead of (1-v)*(H-1).
+                // With HELIOS_OPTIX8_UV_FIX=1 the pre-flip is dropped, so this path samples the
+                // texture exactly like OptiX 6.5 (primitiveIntersection.cu:213-215), the Vulkan
+                // backend and the CPU solid-fraction / triangle-culling test. Default off keeps
+                // every existing render bit-for-bit reproducible.
+                uv_v = params.uv_mask_flip_fix ? uv.y : 1.f - uv.y; // Y-flip to match OptiX 6 convention
             } else {
                 // Parametric UV: use barycentric coordinates directly
                 uv_u = beta + gamma; // along u-axis (v1 is at u=1)
@@ -1373,7 +1379,9 @@ extern "C" __global__ void __raygen__direct() {
                                 uv0.x + beta * (uv1.x - uv0.x) + gamma * (uv2.x - uv0.x),
                                 uv0.y + beta * (uv1.y - uv0.y) + gamma * (uv2.y - uv0.y));
                             uv_u = uv.x;
-                            uv_v = 1.f - uv.y; // Y-flip (matches intersection convention)
+                            // Same V convention as __intersection__patch: legacy pre-flip unless
+                            // HELIOS_OPTIX8_UV_FIX=1 selects the single flip of OptiX 6.5.
+                            uv_v = params.uv_mask_flip_fix ? uv.y : 1.f - uv.y; // Y-flip (matches intersection convention)
                         } else {
                             uv_u = sp.y;  // = beta + gamma
                             uv_v = sp.x;  // = gamma
@@ -1647,7 +1655,9 @@ extern "C" __global__ void __raygen__diffuse() {
                                 uv0.x + beta * (uv1.x - uv0.x) + gamma * (uv2.x - uv0.x),
                                 uv0.y + beta * (uv1.y - uv0.y) + gamma * (uv2.y - uv0.y));
                             uv_u = uv.x;
-                            uv_v = 1.f - uv.y;
+                            // Same V convention as __intersection__patch: legacy pre-flip unless
+                            // HELIOS_OPTIX8_UV_FIX=1 selects the single flip of OptiX 6.5.
+                            uv_v = params.uv_mask_flip_fix ? uv.y : 1.f - uv.y;
                         } else {
                             uv_u = sp.y;
                             uv_v = sp.x;

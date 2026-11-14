@@ -188,6 +188,7 @@ struct OptiX8LaunchParams {
     uint32_t  specular_reflection_enabled;
     uint32_t  camera_ID;
     uint32_t  bbox_UUID_base;        //!< Starting UUID for bboxes
+    uint32_t  uv_mask_flip_fix;      //!< 1 = custom-UV triangle mask lookups use the single V flip of OptiX 6.5 (HELIOS_OPTIX8_UV_FIX=1), 0 = legacy double flip
 
     float2    periodic_flag;         //!< (x_periodic, y_periodic)
     float3    sun_direction;
