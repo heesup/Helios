@@ -985,10 +985,20 @@ void Visualizer::transferBufferData() {
     // doesBufferNeedFullUpdate() reports.
     const bool force_full_upload = geometry_handler.doesBufferNeedFullUpdate();
 
+    // Buffers of the current geometry type that the two helpers below upload in full in this call. When all twelve of
+    // a type are, every primitive of that type is already on the GPU and the per-dirty-primitive loop further down
+    // would only upload the same bytes again, one primitive at a time (about 19 GL calls each). On a scene built in one
+    // go every primitive is dirty, so that loop re-sent the whole scene as millions of tiny calls; Mesa's d3d12 driver
+    // (WSL) keeps a staging allocation per call until the frame ends, about 13 kB per primitive, so the first frame of a
+    // 1 M-primitive scene ran for minutes and used 10+ GB. (Fix 2026-11-15.)
+    int full_uploads_this_type = 0;
+    std::vector<bool> type_fully_uploaded(GeometryHandler::all_geometry_types.size(), false);
+
     auto ensureArrayBuffer = [&](GLuint buf, GLenum target, GLsizeiptr size, const void *data, GLsizeiptr &last_uploaded_size) {
         if (size == last_uploaded_size && !force_full_upload) {
             return;
         }
+        full_uploads_this_type++;
         glBindBuffer(target, buf);
         if (size != last_uploaded_size) {
             glBufferData(target, size, data, GL_STATIC_DRAW);
@@ -1004,6 +1014,7 @@ void Visualizer::transferBufferData() {
             glTexBuffer(GL_TEXTURE_BUFFER, format, buf);
             return;
         }
+        full_uploads_this_type++;
         glBindBuffer(GL_TEXTURE_BUFFER, buf);
         if (size != last_uploaded_size) {
             glBufferData(GL_TEXTURE_BUFFER, size, data, GL_STATIC_DRAW);
@@ -1018,6 +1029,7 @@ void Visualizer::transferBufferData() {
     // Ensure buffers are allocated to the correct size
     for (size_t gi = 0; gi < GeometryHandler::all_geometry_types.size(); ++gi) {
         const auto geometry_type = GeometryHandler::all_geometry_types[gi];
+        full_uploads_this_type = 0;
         const auto *vertex_data = geometry_handler.getVertexData_ptr(geometry_type);
         const auto *uv_data = geometry_handler.getUVData_ptr(geometry_type);
         const auto *face_index_data = geometry_handler.getFaceIndexData_ptr(geometry_type);
@@ -1043,6 +1055,7 @@ void Visualizer::transferBufferData() {
         ensureTextureBuffer(coordinate_flag_buffer.at(gi), coordinate_flag_texture_object.at(gi), GL_R32I, coordinate_flag_data->size() * sizeof(GLint), coordinate_flag_data->data(), last_uploaded_buffer_sizes.at(gi).at(9));
         ensureTextureBuffer(sky_geometry_flag_buffer.at(gi), sky_geometry_flag_texture_object.at(gi), GL_R8I, sky_geometry_flag_data->size() * sizeof(GLbyte), sky_geometry_flag_data->data(), last_uploaded_buffer_sizes.at(gi).at(10));
         ensureTextureBuffer(hidden_flag_buffer.at(gi), hidden_flag_texture_object.at(gi), GL_R8I, visible_flag_data->size() * sizeof(GLbyte), visible_flag_data->data(), last_uploaded_buffer_sizes.at(gi).at(11));
+        type_fully_uploaded.at(gi) = (full_uploads_this_type == 12);
 
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindTexture(GL_TEXTURE_BUFFER, 0);
@@ -1057,6 +1070,12 @@ void Visualizer::transferBufferData() {
         const auto &index_map = geometry_handler.getIndexMap(UUID);
         auto geometry_type = index_map.geometry_type;
         size_t i = std::find(GeometryHandler::all_geometry_types.begin(), GeometryHandler::all_geometry_types.end(), geometry_type) - GeometryHandler::all_geometry_types.begin();
+        if (type_fully_uploaded.at(i)) {
+            if (geometry_type == GeometryHandler::GEOMETRY_TYPE_RECTANGLE) {
+                rect_dirty = true;
+            }
+            continue;   // already uploaded with its whole buffer above
+        }
 
         const char vcount = GeometryHandler::getVertexCount(geometry_type);
 
@@ -1074,43 +1093,27 @@ void Visualizer::transferBufferData() {
 
         glBindBuffer(GL_TEXTURE_BUFFER, color_buffer.at(i));
         glBufferSubData(GL_TEXTURE_BUFFER, index_map.color_index * sizeof(GLfloat), 4 * sizeof(GLfloat), geometry_handler.getColorData_ptr(geometry_type)->data() + index_map.color_index);
-        glBindTexture(GL_TEXTURE_BUFFER, color_texture_object.at(i));
-        glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32F, color_buffer.at(i));
 
         glBindBuffer(GL_ARRAY_BUFFER, normal_buffer.at(i));
         glBufferSubData(GL_ARRAY_BUFFER, index_map.normal_index * sizeof(GLfloat), 3 * sizeof(GLfloat), geometry_handler.getNormalData_ptr(geometry_type)->data() + index_map.normal_index);
-        glBindTexture(GL_TEXTURE_BUFFER, normal_texture_object.at(i));
-        glTexBuffer(GL_TEXTURE_BUFFER, GL_RGB32F, normal_buffer.at(i));
 
         glBindBuffer(GL_ARRAY_BUFFER, material_index_buffer.at(i));
         glBufferSubData(GL_ARRAY_BUFFER, index_map.material_index_index * sizeof(GLint), sizeof(GLint), geometry_handler.getMaterialIndexData_ptr(geometry_type)->data() + index_map.material_index_index);
-        glBindTexture(GL_TEXTURE_BUFFER, material_index_texture_object.at(i));
-        glTexBuffer(GL_TEXTURE_BUFFER, GL_R32I, material_index_buffer.at(i));
 
         glBindBuffer(GL_ARRAY_BUFFER, texture_flag_buffer.at(i));
         glBufferSubData(GL_ARRAY_BUFFER, index_map.texture_flag_index * sizeof(GLint), sizeof(GLint), geometry_handler.getTextureFlagData_ptr(geometry_type)->data() + index_map.texture_flag_index);
-        glBindTexture(GL_TEXTURE_BUFFER, texture_flag_texture_object.at(i));
-        glTexBuffer(GL_TEXTURE_BUFFER, GL_R32I, texture_flag_buffer.at(i));
 
         glBindBuffer(GL_ARRAY_BUFFER, texture_ID_buffer.at(i));
         glBufferSubData(GL_ARRAY_BUFFER, index_map.texture_ID_index * sizeof(GLint), sizeof(GLint), geometry_handler.getTextureIDData_ptr(geometry_type)->data() + index_map.texture_ID_index);
-        glBindTexture(GL_TEXTURE_BUFFER, texture_ID_texture_object.at(i));
-        glTexBuffer(GL_TEXTURE_BUFFER, GL_R32I, texture_ID_buffer.at(i));
 
         glBindBuffer(GL_ARRAY_BUFFER, coordinate_flag_buffer.at(i));
         glBufferSubData(GL_ARRAY_BUFFER, index_map.coordinate_flag_index * sizeof(GLint), sizeof(GLint), geometry_handler.getCoordinateFlagData_ptr(geometry_type)->data() + index_map.coordinate_flag_index);
-        glBindTexture(GL_TEXTURE_BUFFER, coordinate_flag_texture_object.at(i));
-        glTexBuffer(GL_TEXTURE_BUFFER, GL_R32I, coordinate_flag_buffer.at(i));
 
         glBindBuffer(GL_ARRAY_BUFFER, sky_geometry_flag_buffer.at(i));
         glBufferSubData(GL_ARRAY_BUFFER, index_map.sky_geometry_flag_index * sizeof(GLbyte), sizeof(GLbyte), geometry_handler.getSkyGeometryFlagData_ptr(geometry_type)->data() + index_map.sky_geometry_flag_index);
-        glBindTexture(GL_TEXTURE_BUFFER, sky_geometry_flag_texture_object.at(i));
-        glTexBuffer(GL_TEXTURE_BUFFER, GL_R8I, sky_geometry_flag_buffer.at(i));
 
         glBindBuffer(GL_ARRAY_BUFFER, hidden_flag_buffer.at(i));
         glBufferSubData(GL_ARRAY_BUFFER, index_map.visible_index * sizeof(GLbyte), sizeof(GLbyte), geometry_handler.getVisibilityFlagData_ptr(geometry_type)->data() + index_map.visible_index);
-        glBindTexture(GL_TEXTURE_BUFFER, hidden_flag_texture_object.at(i));
-        glTexBuffer(GL_TEXTURE_BUFFER, GL_R8I, hidden_flag_buffer.at(i));
 
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindTexture(GL_TEXTURE_BUFFER, 0);
