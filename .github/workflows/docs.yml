@@ -36,7 +36,7 @@ jobs:
         submodules: recursive  # Include submodules for doc assets
         fetch-depth: 0  # Fetch full history including tags
 
-    - name: Validate checkout and force tag refresh
+    - name: Validate checkout and refresh tags
       run: |
         echo "=== Git Checkout Validation ==="
 
@@ -53,34 +53,14 @@ jobs:
         fi
         echo "✓ Checkout SHA verified: $CHECKOUT_SHA"
 
-        # Force refresh tags with retry logic (handles propagation delays)
-        echo ""
-        echo "=== Forcing Tag Refresh ==="
-        MAX_RETRIES=5
-        RETRY_DELAY=2
-
-        for attempt in $(seq 1 $MAX_RETRIES); do
-          echo "Attempt $attempt/$MAX_RETRIES: Fetching tags..."
-
-          # Force fetch all tags from remote
-          git fetch --tags --force origin
-
-          # Verify we have tags
-          TAG_COUNT=$(git tag | wc -l)
-          if [ "$TAG_COUNT" -gt 0 ]; then
-            echo "✓ Successfully fetched $TAG_COUNT tags"
-            break
-          else
-            echo "  No tags found, retrying..."
-            if [ $attempt -lt $MAX_RETRIES ]; then
-              sleep $RETRY_DELAY
-              RETRY_DELAY=$((RETRY_DELAY * 2))  # Exponential backoff
-            else
-              echo "ERROR: Could not fetch tags after $MAX_RETRIES attempts"
-              exit 1
-            fi
-          fi
-        done
+        # Refresh tags when available; repositories without tags can still build docs.
+        git fetch --tags --force origin
+        TAG_COUNT=$(git tag | wc -l)
+        if [ "$TAG_COUNT" -gt 0 ]; then
+          echo "✓ Successfully fetched $TAG_COUNT tags"
+        else
+          echo "No tags found; the documentation version will use the commit SHA"
+        fi
 
         # Display tags at current HEAD for debugging
         echo ""
@@ -148,9 +128,8 @@ jobs:
             echo "This indicates commits after the tag - using tag anyway"
           fi
         else
-          echo "ERROR: No tags found in repository"
-          echo "Cannot determine version - this should not happen in production"
-          exit 1
+          VERSION="0.0.0-$(git rev-parse --short=12 HEAD)"
+          echo "No tags found; using commit-based version: $VERSION"
         fi
 
         # Validate version format (should be X.Y.Z or X.Y.Z-suffix)
